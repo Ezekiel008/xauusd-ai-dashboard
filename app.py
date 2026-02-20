@@ -11,7 +11,7 @@ import os
 from datetime import datetime
 
 # ---------------------------------------
-# Telegram Function (DEFINE FIRST)
+# Telegram Function
 # ---------------------------------------
 def send_telegram_alert(message):
     token = os.getenv("BOT_TOKEN")
@@ -36,9 +36,13 @@ st.markdown("Live Machine Learning Gold Prediction System")
 st_autorefresh(interval=60000, key="datarefresh")
 
 # ---------------------------------------
-# Load Model
+# Load Model (Safe Load)
 # ---------------------------------------
-model = joblib.load("xauusd_rf_model.pkl")
+try:
+    model = joblib.load("xauusd_rf_model.pkl")
+except Exception as e:
+    st.error(f"Model loading failed: {e}")
+    st.stop()
 
 # ---------------------------------------
 # Sidebar Settings
@@ -46,36 +50,64 @@ model = joblib.load("xauusd_rf_model.pkl")
 st.sidebar.header("Settings")
 
 interval = st.sidebar.selectbox("Timeframe", ["1h", "4h", "1d"])
-period = st.sidebar.selectbox("Data Period", ["1mo", "3mo", "6mo", "1y"])
+period = st.sidebar.selectbox("Data Period", ["1mo", "3mo", "6mo"])
 
 # ---------------------------------------
-# Download Data
+# Download Data (SAFE VERSION)
 # ---------------------------------------
 symbol = "GC=F"
-data = yf.download(symbol, period=period, interval=interval)
+
+try:
+    data = yf.download(symbol, period=period, interval=interval, auto_adjust=True)
+except Exception as e:
+    st.error(f"Data download error: {e}")
+    st.stop()
 
 if data.empty:
-    st.error("No data retrieved.")
+    st.error("❌ No data retrieved from Yahoo Finance.")
+    st.stop()
+
+# Flatten MultiIndex if exists
+if isinstance(data.columns, pd.MultiIndex):
+    data.columns = data.columns.get_level_values(0)
+
+required_cols = ["Open", "High", "Low", "Close"]
+
+for col in required_cols:
+    if col not in data.columns:
+        st.error(f"Missing column: {col}")
+        st.stop()
+
+# Ensure numeric and 1D
+for col in required_cols:
+    data[col] = pd.to_numeric(data[col], errors="coerce")
+
+data = data.dropna()
+
+if len(data) < 200:
+    st.warning("Not enough historical data for indicators.")
     st.stop()
 
 # ---------------------------------------
-# Indicator Calculation
+# Indicator Calculation (SAFE)
 # ---------------------------------------
-data["EMA50"] = ta.trend.ema_indicator(data["Close"], window=50)
-data["EMA200"] = ta.trend.ema_indicator(data["Close"], window=200)
-data["RSI"] = ta.momentum.rsi(data["Close"], window=14)
+close_series = pd.Series(data["Close"]).astype(float)
+
+data["EMA50"] = ta.trend.ema_indicator(close_series, window=50)
+data["EMA200"] = ta.trend.ema_indicator(close_series, window=200)
+data["RSI"] = ta.momentum.rsi(close_series, window=14)
 data["ATR"] = ta.volatility.average_true_range(
-    data["High"], data["Low"], data["Close"], window=14
+    data["High"], data["Low"], close_series, window=14
 )
 
 data["EMA_Diff"] = data["EMA50"] - data["EMA200"]
-data["Momentum"] = data["Close"] - data["Close"].shift(5)
+data["Momentum"] = close_series - close_series.shift(5)
 data["Range"] = data["High"] - data["Low"]
 
 data.dropna(inplace=True)
 
 if len(data) < 10:
-    st.warning("Not enough data for prediction.")
+    st.warning("Not enough processed data for prediction.")
     st.stop()
 
 # ---------------------------------------
@@ -85,11 +117,15 @@ features = ["EMA50","EMA200","EMA_Diff","RSI","ATR","Momentum","Range"]
 
 latest_data = data[features].iloc[-1:].values
 
-prediction = model.predict(latest_data)[0]
-probability = model.predict_proba(latest_data)[0][1]
+try:
+    prediction = model.predict(latest_data)[0]
+    probability = model.predict_proba(latest_data)[0][1]
+except Exception as e:
+    st.error(f"Prediction failed: {e}")
+    st.stop()
 
-current_price = data["Close"].iloc[-1]
-atr = data["ATR"].iloc[-1]
+current_price = float(data["Close"].iloc[-1])
+atr = float(data["ATR"].iloc[-1])
 timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 # ---------------------------------------
