@@ -1,10 +1,11 @@
 streamlit
+streamlit-autorefresh
 pandas
 numpy
 yfinance
 ta
-scikit-learn
-matplotlib
 joblib
+matplotlib
 requests
-streamlit-autorefresh
+xgboost
+scikit-learn
