@@ -11,7 +11,7 @@ import os
 from datetime import datetime
 
 # ---------------------------------------
-# Telegram Function
+# TELEGRAM ALERT FUNCTION
 # ---------------------------------------
 def send_telegram_alert(message):
     token = os.getenv("BOT_TOKEN")
@@ -23,7 +23,7 @@ def send_telegram_alert(message):
         requests.post(url, data=payload)
 
 # ---------------------------------------
-# Page Config
+# PAGE CONFIG
 # ---------------------------------------
 st.set_page_config(page_title="XAUUSD AI Trading Dashboard", layout="wide")
 
@@ -36,126 +36,103 @@ st.markdown("Live Machine Learning Gold Prediction System")
 st_autorefresh(interval=60000, key="datarefresh")
 
 # ---------------------------------------
-# Load Model (Safe Load)
+# LOAD MODEL
 # ---------------------------------------
-try:
-    model = joblib.load("xauusd_rf_model.pkl")
-except Exception as e:
-    st.error(f"Model loading failed: {e}")
-    st.stop()
+model = joblib.load("xauusd_rf_model.pkl")
 
 # ---------------------------------------
-# Sidebar Settings
+# SIDEBAR SETTINGS
 # ---------------------------------------
 st.sidebar.header("Settings")
 
 interval = st.sidebar.selectbox("Timeframe", ["1h", "4h", "1d"])
-period = st.sidebar.selectbox("Data Period", ["1mo", "3mo", "6mo"])
+period = st.sidebar.selectbox("Data Period", ["1mo", "3mo", "6mo", "1y"])
 
 # ---------------------------------------
-# Download Data (SAFE VERSION)
+# DOWNLOAD DATA
 # ---------------------------------------
 symbol = "GC=F"
+data = yf.download(symbol, period=period, interval=interval)
 
-try:
-    data = yf.download(symbol, period=period, interval=interval, auto_adjust=True)
-except Exception as e:
-    st.error(f"Data download error: {e}")
-    st.stop()
-
-if data.empty:
-    st.error("❌ No data retrieved from Yahoo Finance.")
-    st.stop()
-
-# Flatten MultiIndex if exists
-if isinstance(data.columns, pd.MultiIndex):
-    data.columns = data.columns.get_level_values(0)
-
-required_cols = ["Open", "High", "Low", "Close"]
-
-for col in required_cols:
-    if col not in data.columns:
-        st.error(f"Missing column: {col}")
-        st.stop()
-
-# Ensure numeric and 1D
-for col in required_cols:
-    data[col] = pd.to_numeric(data[col], errors="coerce")
-
-data = data.dropna()
-
-if len(data) < 200:
-    st.warning("Not enough historical data for indicators.")
+if data.empty or "Close" not in data.columns:
+    st.error("❌ No data retrieved. Try different timeframe.")
     st.stop()
 
 # ---------------------------------------
-# Indicator Calculation (SAFE)
+# INDICATORS
 # ---------------------------------------
-close_series = pd.Series(data["Close"]).astype(float)
-
-data["EMA50"] = ta.trend.ema_indicator(close_series, window=50)
-data["EMA200"] = ta.trend.ema_indicator(close_series, window=200)
-data["RSI"] = ta.momentum.rsi(close_series, window=14)
+data["EMA50"] = ta.trend.ema_indicator(data["Close"], window=50)
+data["EMA200"] = ta.trend.ema_indicator(data["Close"], window=200)
+data["RSI"] = ta.momentum.rsi(data["Close"], window=14)
 data["ATR"] = ta.volatility.average_true_range(
-    data["High"], data["Low"], close_series, window=14
+    data["High"], data["Low"], data["Close"], window=14
 )
 
+data["ATR_pct"] = data["ATR"] / data["Close"]
 data["EMA_Diff"] = data["EMA50"] - data["EMA200"]
-data["Momentum"] = close_series - close_series.shift(5)
+data["Momentum"] = data["Close"] - data["Close"].shift(5)
 data["Range"] = data["High"] - data["Low"]
 
 data.dropna(inplace=True)
 
 if len(data) < 10:
-    st.warning("Not enough processed data for prediction.")
+    st.warning("Not enough data for prediction.")
     st.stop()
 
 # ---------------------------------------
-# Prediction
+# FEATURES
 # ---------------------------------------
-features = ["EMA50","EMA200","EMA_Diff","RSI","ATR","Momentum","Range"]
+features = [
+    "EMA50",
+    "EMA200",
+    "EMA_Diff",
+    "RSI",
+    "ATR",
+    "Momentum",
+    "Range"
+]
 
 latest_data = data[features].iloc[-1:].values
 
-try:
-    prediction = model.predict(latest_data)[0]
-    probability = model.predict_proba(latest_data)[0][1]
-except Exception as e:
-    st.error(f"Prediction failed: {e}")
-    st.stop()
+# ---------------------------------------
+# PREDICTION
+# ---------------------------------------
+probability = model.predict_proba(latest_data)[0][1]
+prediction = 1 if probability > 0.35 else 0
 
-current_price = float(data["Close"].iloc[-1])
-atr = float(data["ATR"].iloc[-1])
+current_price = data["Close"].iloc[-1]
+atr = data["ATR"].iloc[-1]
 timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 # ---------------------------------------
-# Trading Logic
+# TRADING LOGIC
 # ---------------------------------------
 if prediction == 1:
     direction = "BUY 📈"
     stop_loss = current_price - (1.5 * atr)
     take_profit = current_price + (3 * atr)
 else:
-    direction = "SELL 📉"
+    direction = "NO TRADE 🚫"
     stop_loss = current_price + (1.5 * atr)
     take_profit = current_price - (3 * atr)
 
 # ---------------------------------------
-# Display Metrics
+# DISPLAY METRICS
 # ---------------------------------------
 col1, col2, col3 = st.columns(3)
+
 col1.metric("Current Price", f"${current_price:.2f}")
 col2.metric("AI Prediction", direction)
 col3.metric("Confidence", f"{probability*100:.2f}%")
 
 st.write(f"Last Updated: {timestamp}")
 
-st.subheader("Suggested Risk Management")
+st.subheader("Risk Management")
 st.write(f"Stop Loss: ${stop_loss:.2f}")
 st.write(f"Take Profit: ${take_profit:.2f}")
 
 # ---------------------------------------
-# Logging
+# TRADE HISTORY LOG
 # ---------------------------------------
 log_data = {
     "Timestamp": timestamp,
@@ -176,6 +153,7 @@ else:
     history = pd.DataFrame()
     last_prediction = None
 
+# Telegram alert on signal change
 if direction != last_prediction:
     message = f"""
 🥇 XAUUSD AI Signal
@@ -190,13 +168,14 @@ Take Profit: ${take_profit:.2f}
 """
     send_telegram_alert(message)
 
+# Save log
 if os.path.exists(log_file):
     log_df.to_csv(log_file, mode='a', header=False, index=False)
 else:
     log_df.to_csv(log_file, index=False)
 
 # ---------------------------------------
-# Show History
+# SHOW HISTORY
 # ---------------------------------------
 st.subheader("Trade History Log")
 
@@ -207,7 +186,7 @@ else:
     st.write("No trade history yet.")
 
 # ---------------------------------------
-# Chart
+# EQUITY CHART
 # ---------------------------------------
 st.subheader("XAUUSD Price Chart")
 
