@@ -54,6 +54,10 @@ period = st.sidebar.selectbox("Data Period", ["1mo", "3mo", "6mo", "1y"])
 symbol = "GC=F"
 data = yf.download(symbol, period=period, interval=interval)
 
+# FIX FOR STREAMLIT CLOUD
+if isinstance(data.columns, pd.MultiIndex):
+    data.columns = data.columns.get_level_values(0)
+
 if data.empty or "Close" not in data.columns:
     st.error("❌ No data retrieved. Try different timeframe.")
     st.stop()
@@ -196,3 +200,4 @@ ax.set_title("Gold Price (GC=F)")
 ax.set_xlabel("Date")
 ax.set_ylabel("Price")
 st.pyplot(fig)
+
